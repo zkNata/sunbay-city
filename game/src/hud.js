@@ -127,11 +127,13 @@ export function drawHud(ctx, state, prompt) {
     ctx.fillText(prompt, VIEW.width / 2, VIEW.height - 34);
   }
 
-  // Bottom right: the controls hint.
+  // Bottom right: the controls hint, right-aligned with a clear margin so it never
+  // touches an edge. It stays right-aligned (not centred) because the context prompt
+  // pill sits bottom-centre and a centred hint would run straight through it.
   ctx.font = `500 12px ${FONT}`;
   ctx.fillStyle = 'rgba(244, 241, 232, 0.75)';
   ctx.textAlign = 'right';
-  ctx.fillText('WASD move/drive · E enter car · F punch · Click shoot · P pause · M mute', VIEW.width - 14, VIEW.height - 14);
+  ctx.fillText('WASD move · E enter car · F punch · Click shoot · P pause · M mute', VIEW.width - 14, VIEW.height - 14);
 
   // The mission toast, centre screen, fading.
   if (state.mission.toastTime > 0 && state.mission.toast) {

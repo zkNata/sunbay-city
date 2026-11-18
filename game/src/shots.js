@@ -113,7 +113,10 @@ export function stageShot(name, seed) {
     setupMission(state, 1);
     state.player.money = 120;
     // The player is already in the job's orange sports car, driving it to the garage.
-    putPlayerInSportsCar(state, 1140, 650, Math.PI / 2);
+    // Start further north on the same road so the garage building lands mid-frame,
+    // clear of the top-right wanted-stars pill (it used to sit right under it, its
+    // GARAGE label showing through the pill behind the stars).
+    putPlayerInSportsCar(state, 1140, 400, Math.PI / 2);
     driveForward(state, 1.0);
     settle(state, 0.4);
     return { state, screen: SCREEN_PLAY };
