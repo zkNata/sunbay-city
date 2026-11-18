@@ -1,193 +1,136 @@
-// Combat: the player's fists and pistol, bullets in flight, and cars that take damage, smoke
-// and explode. Hurting people and blowing up cars are crimes: they raise the wanted level.
+// Combat: fists and the pistol. A punch is a short arc in front of the player; a bullet flies
+// straight until it hits a cop, a cop car, a pedestrian or a building. Shooting is a crime.
 import { PLAYER } from './config.js';
-import { circleHitsBuilding } from './world.js';
+import { distance } from './world.js';
+import { raiseWanted } from './player.js';
+import { scarePeds } from './pedestrians.js';
 
-export function createCombat() {
-  const bullets = [];
-
-  function shoot(state, fromX, fromY, angle, damage) {
-    bullets.push({
-      x: fromX + Math.cos(angle) * 22,
-      y: fromY + Math.sin(angle) * 22,
-      vx: Math.cos(angle) * 900,
-      vy: Math.sin(angle) * 900,
-      life: 0.9,
-      damage: damage || PLAYER.bulletDamage,
-    });
-    state.shotsFiredTimer = 1.2;
-  }
-
-  function punch(state, player, audio, particles) {
-    if (player.punchTimer > 0 || player.inCar) return false;
-    player.punchTimer = PLAYER.punchCooldown;
-    audio.punch();
-    const px = player.x + Math.cos(player.angle) * 30;
-    const py = player.y + Math.sin(player.angle) * 30;
-    let hit = false;
-    for (const ped of state.peds.peds) {
-      if (ped.down) continue;
-      const dx = ped.x - px;
-      const dy = ped.y - py;
-      if (dx * dx + dy * dy < PLAYER.punchRange * PLAYER.punchRange) {
-        ped.down = true;
-        ped.downTimer = 4;
-        ped.x += Math.cos(player.angle) * 18;
-        ped.y += Math.sin(player.angle) * 18;
-        particles.sparks(ped.x, ped.y);
-        hit = true;
-      }
-    }
-    for (const unit of state.police.units) {
-      if (unit.kind !== 'foot') continue;
-      const dx = unit.x - px;
-      const dy = unit.y - py;
-      if (dx * dx + dy * dy < PLAYER.punchRange * PLAYER.punchRange) {
-        unit.health -= PLAYER.punchDamage * 2;
-        particles.sparks(unit.x, unit.y);
-        hit = true;
-        if (unit.health <= 0) {
-          state.police.units.splice(state.police.units.indexOf(unit), 1);
-          addWanted(state, 1);
-        }
-      }
-    }
-    if (hit) addWanted(state, 1);
-    return hit;
-  }
-
-  function step(dt, state, city, particles, audio) {
-    for (let i = bullets.length - 1; i >= 0; i -= 1) {
-      const b = bullets[i];
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      b.life -= dt;
-      let dead = b.life <= 0;
-      if (!dead && circleHitsBuilding(b.x, b.y, 2, city)) dead = true;
-      if (!dead) {
-        // Pedestrians.
-        for (const ped of state.peds.peds) {
-          if (ped.down) continue;
-          const dx = ped.x - b.x;
-          const dy = ped.y - b.y;
-          if (dx * dx + dy * dy < 14 * 14) {
-            ped.down = true;
-            ped.downTimer = 6;
-            particles.sparks(b.x, b.y);
-            addWanted(state, 1);
-            dead = true;
-            break;
-          }
-        }
-      }
-      if (!dead) {
-        // Foot police.
-        for (const unit of state.police.units) {
-          if (unit.kind !== 'foot') continue;
-          const dx = unit.x - b.x;
-          const dy = unit.y - b.y;
-          if (dx * dx + dy * dy < 14 * 14) {
-            unit.health -= b.damage;
-            particles.sparks(b.x, b.y);
-            addWanted(state, 1);
-            dead = true;
-            if (unit.health <= 0) state.police.units.splice(state.police.units.indexOf(unit), 1);
-            break;
-          }
-        }
-      }
-      if (!dead) {
-        // Cars (not the player's own).
-        for (const car of state.traffic.cars) {
-          if (car.dead || car.isPlayerCar) continue;
-          const dx = car.x - b.x;
-          const dy = car.y - b.y;
-          const localX = dx * Math.cos(-car.angle) - dy * Math.sin(-car.angle);
-          const localY = dx * Math.sin(-car.angle) + dy * Math.cos(-car.angle);
-          if (Math.abs(localX) < 24 && Math.abs(localY) < 12) {
-            car.health -= b.damage;
-            particles.sparks(b.x, b.y);
-            dead = true;
-            if (car.kind === 'police') addWanted(state, 1);
-            if (car.health <= 0) explodeCar(state, car, particles, audio);
-            break;
-          }
-        }
-        for (const car of state.extraCars) {
-          if (car.dead || car.isPlayerCar) continue;
-          const dx = car.x - b.x;
-          const dy = car.y - b.y;
-          const localX = dx * Math.cos(-car.angle) - dy * Math.sin(-car.angle);
-          const localY = dx * Math.sin(-car.angle) + dy * Math.cos(-car.angle);
-          if (Math.abs(localX) < 24 && Math.abs(localY) < 12) {
-            car.health -= b.damage;
-            particles.sparks(b.x, b.y);
-            dead = true;
-            if (car.health <= 0) explodeCar(state, car, particles, audio);
-            break;
-          }
-        }
-      }
-      if (!dead) {
-        // Police cars (they live in the police units, not in the traffic list).
-        for (const unit of state.police.units) {
-          if (unit.kind !== 'car' || unit.car.dead) continue;
-          const car = unit.car;
-          const dx = car.x - b.x;
-          const dy = car.y - b.y;
-          const localX = dx * Math.cos(-car.angle) - dy * Math.sin(-car.angle);
-          const localY = dx * Math.sin(-car.angle) + dy * Math.cos(-car.angle);
-          if (Math.abs(localX) < 24 && Math.abs(localY) < 12) {
-            car.health -= b.damage;
-            particles.sparks(b.x, b.y);
-            addWanted(state, 1);
-            dead = true;
-            if (car.health <= 0) explodeCar(state, car, particles, audio);
-            break;
-          }
-        }
-      }
-      if (dead) bullets.splice(i, 1);
-    }
-    // A burning car explodes once its health is gone.
-    for (const car of [...state.traffic.cars, ...state.extraCars]) {
-      if (!car.dead && car.health <= 0) explodeCar(state, car, particles, audio);
-    }
-    for (const unit of state.police.units) {
-      if (unit.kind === 'car' && !unit.car.dead && unit.car.health <= 0) explodeCar(state, unit.car, particles, audio);
-    }
-  }
-
-  function explodeCar(state, car, particles, audio) {
-    if (car.dead) return;
-    car.dead = true;
-    car.health = 0;
-    particles.explosion(car.x, car.y);
-    audio.explosion();
-    addWanted(state, 1);
-    const player = state.player;
-    const d = Math.hypot(player.x - car.x, player.y - car.y);
-    if (d < 90 && !player.inCar) {
-      player.health -= 30;
-      if (player.health <= 0) state.pendingWasted = true;
-    }
-    if (player.inCar === car) {
-      player.inCar = null;
-      player.x = car.x + 40;
-      player.y = car.y;
-      player.health -= 25;
-      // A second of grace after being thrown clear, so the police do not gun the player
-      // down before they can run.
-      player.invulnerable = 1.0;
-      if (player.health <= 0) state.pendingWasted = true;
-    }
-  }
-
-  return { bullets, shoot, punch, step, explodeCar };
+export function shootAt(state, targetX, targetY) {
+  const player = state.player;
+  if (!player.pistol || player.inCar !== null || player.shootCooldown > 0 || player.dead) return;
+  player.shootCooldown = PLAYER.shootCooldown;
+  state.stats.shots += 1;
+  const angle = Math.atan2(targetY - player.y, targetX - player.x);
+  player.aimAngle = angle;
+  state.bullets.push({
+    x: player.x + Math.cos(angle) * 18,
+    y: player.y + Math.sin(angle) * 18,
+    vx: Math.cos(angle) * 720,
+    vy: Math.sin(angle) * 720,
+    life: 0.75,
+  });
+  state.particles.push({ x: player.x + Math.cos(angle) * 22, y: player.y + Math.sin(angle) * 22, vx: 0, vy: 0, life: 0.12, maxLife: 0.12, size: 10, color: '#ffd94d', kind: 'flash' });
+  raiseWanted(state, 1);
+  scarePeds(state, player.x, player.y, 260);
 }
 
-export function addWanted(state, stars) {
-  if (state.wanted >= 5) return;
-  state.wanted = Math.min(5, state.wanted + stars);
-  state.cleanTimer = 0;
+export function updateCombat(state, dt) {
+  const player = state.player;
+  // The punch arc: anything close in front of the player gets knocked back and hurt.
+  if (state.punch) {
+    state.punch.time -= dt;
+    const punch = state.punch;
+    const hit = (target, radius) => {
+      if (distance(punch, target) > PLAYER.punchRange + radius) return false;
+      const angle = Math.atan2(target.y - punch.y, target.x - punch.x);
+      let diff = angle - punch.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      return Math.abs(diff) < Math.PI / 2.2;
+    };
+    for (const cop of state.footCops) {
+      if (hit(cop, 10)) {
+        cop.health -= PLAYER.punchDamage;
+        cop.x += Math.cos(punch.angle) * 26;
+        cop.y += Math.sin(punch.angle) * 26;
+      }
+    }
+    for (const ped of state.peds) {
+      if (hit(ped, 8)) {
+        ped.tx = ped.x + Math.cos(punch.angle) * 240;
+        ped.ty = ped.y + Math.sin(punch.angle) * 240;
+        ped.flee = 3;
+      }
+    }
+    if (state.punch.time <= 0) state.punch = null;
+  }
+
+  // Bullets fly, then die on a building, a cop, a cop car or a pedestrian.
+  for (let i = state.bullets.length - 1; i >= 0; i -= 1) {
+    const bullet = state.bullets[i];
+    bullet.x += bullet.vx * dt;
+    bullet.y += bullet.vy * dt;
+    bullet.life -= dt;
+    let dead = bullet.life <= 0;
+    if (!dead) {
+      for (const b of state.city.buildings) {
+        if (bullet.x > b.x && bullet.x < b.x + b.w && bullet.y > b.y && bullet.y < b.y + b.h) {
+          dead = true;
+          break;
+        }
+      }
+    }
+    if (!dead) {
+      for (let j = state.footCops.length - 1; j >= 0; j -= 1) {
+        if (distance(bullet, state.footCops[j]) < 14) {
+          state.footCops[j].health -= PLAYER.bulletDamage;
+          dead = true;
+          break;
+        }
+      }
+    }
+    if (!dead) {
+      for (const car of state.cars) {
+        if (car.kind !== 'police' || car.exploded) continue;
+        if (distance(bullet, car) < 24) {
+          car.health -= PLAYER.bulletDamage;
+          dead = true;
+          break;
+        }
+      }
+    }
+    if (!dead) {
+      for (const ped of state.peds) {
+        if (distance(bullet, ped) < 12) {
+          scarePeds(state, ped.x, ped.y, 200);
+          dead = true;
+          break;
+        }
+      }
+    }
+    if (dead) {
+      state.particles.push({ x: bullet.x, y: bullet.y, vx: 0, vy: 0, life: 0.2, maxLife: 0.2, size: 8, color: '#ffd94d', kind: 'flash' });
+      state.bullets.splice(i, 1);
+    }
+  }
+
+  // Downed foot cops leave; a cop car at zero health smokes, then blows up and its driver bails.
+  for (let i = state.footCops.length - 1; i >= 0; i -= 1) {
+    if (state.footCops[i].health <= 0) state.footCops.splice(i, 1);
+  }
+  for (const car of state.cars) {
+    if (car.kind === 'police' && !car.exploded && car.health <= 0) {
+      car.exploded = true;
+      car.driver = null;
+      car.speed = 0;
+      car.smoke = 2;
+      for (let k = 0; k < 14; k += 1) {
+        const angle = state.rng.range(0, Math.PI * 2);
+        const speed = state.rng.range(40, 220);
+        state.particles.push({
+          x: car.x, y: car.y,
+          vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+          life: state.rng.range(0.4, 0.9), maxLife: 0.9, size: state.rng.range(6, 16),
+          color: state.rng.pick(['#ff8a3d', '#ffd94d', '#8b93a3']), kind: 'spark',
+        });
+      }
+      if (state.player.inCar === car.id) {
+        // Thrown clear of the blast, briefly invulnerable.
+        state.player.inCar = null;
+        state.player.x = car.x + 40;
+        state.player.y = car.y;
+        state.player.invulnerable = PLAYER.invulnerable;
+      }
+    }
+  }
 }

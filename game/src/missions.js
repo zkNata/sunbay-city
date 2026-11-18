@@ -1,208 +1,131 @@
-// The story: four missions in order, told by Marta, the cafe owner who runs Sunbay's
-// quiet side. Each mission has one objective at a time — a place to reach, a car to steal,
-// a package to deliver, a job to pull — with a marker in the world, a blip on the minimap
-// and a line in the HUD. Finishing one pays cash, saves the game and unlocks the next.
-import { PLACES } from './world.js';
-import { addWanted } from './combat.js';
+// The story: four missions in order, each with a title, an objective, a target on the map and
+// a payout. Completing a mission writes the save AFTER the mission index moves, never before.
+import { MISSIONS } from './config.js';
+import { distance, LANDMARKS, makeCar } from './world.js';
+import { carById } from './player.js';
+import { writeSave } from './save.js';
 
-export const MISSIONS = [
-  {
-    id: 1,
-    name: 'Welcome to Sunbay',
-    brief: "Marta needs a word. Go to the cafe on Coral Avenue.",
-    steps: [
-      { text: "Go to Marta's Cafe", target: PLACES.cafe, radius: 70, action: 'talk' },
-    ],
-    reward: 150,
-    done: 'Marta: "Rook. You look hungry. I have work — and a pistol, if you need it."',
-  },
-  {
-    id: 2,
-    name: 'Hot Wheels',
-    brief: 'Steal the orange sports car by the marina road and bring it to the garage.',
-    steps: [
-      { text: 'Steal the orange sports car', target: null, radius: 60, action: 'steal' },
-      { text: 'Deliver the car to Sunbay Garage', target: PLACES.garage, radius: 90, action: 'deliver' },
-    ],
-    reward: 400,
-    done: 'Marta: "Clean work. The garage pays well for a car nobody misses."',
-  },
-  {
-    id: 3,
-    name: 'Package Run',
-    brief: 'Pick up the package at the Old Dock. The beach bar pays on delivery — fast.',
-    steps: [
-      { text: 'Pick up the package at the Old Dock', target: PLACES.dock, radius: 70, action: 'talk' },
-      { text: 'Deliver the package to Palma Beach Bar', target: PLACES.beachBar, radius: 80, action: 'deliver', timer: 90 },
-    ],
-    reward: 600,
-    done: 'Marta: "Ninety seconds and not a scratch. The bar owes you a drink."',
-  },
-  {
-    id: 4,
-    name: 'The Marina Job',
-    brief: 'Lift the cash from the Marina Office, then lose the cops and reach the safehouse.',
-    steps: [
-      { text: 'Grab the cash at the Marina Office', target: PLACES.marina, radius: 70, action: 'talk' },
-      { text: 'Escape the police and reach the Safehouse', target: PLACES.safehouse, radius: 90, action: 'deliver' },
-    ],
-    reward: 1000,
-    done: 'Marta: "That was the whole marina payroll. Sunbay is yours now, Rook."',
-  },
-];
+export const MISSION_NAMES = ['Welcome to Sunbay', 'Hot Wheels', 'Package Run', 'The Marina Job'];
 
-export function createMissions() {
-  return {
-    index: 0,
-    step: 0,
-    timer: 0,
-    active: true,
-    completed: false,
-    stealCar: null,
-    hasPackage: false,
-  };
+function toast(state, text) {
+  state.mission.toast = text;
+  state.mission.toastTime = 3;
 }
 
-export function currentMission(missions) {
-  if (missions.index >= MISSIONS.length) return null;
-  return MISSIONS[missions.index];
-}
-
-export function currentStep(missions) {
-  const mission = currentMission(missions);
-  if (!mission) return null;
-  return mission.steps[missions.step];
-}
-
-export function missionTarget(missions, state) {
-  const step = currentStep(missions);
-  if (!step) return null;
-  if (step.action === 'steal' && missions.stealCar) {
-    return { x: missions.stealCar.x, y: missions.stealCar.y, radius: step.radius };
+export function setupMission(state, index) {
+  const mission = state.mission;
+  mission.index = index;
+  mission.stage = 'go';
+  mission.timer = 0;
+  if (index === 1) {
+    // The orange sports car waits on the 1140 road, engine running, owner nowhere to be seen.
+    const car = makeCar('sports', 1140, 1000, Math.PI / 2, null);
+    state.cars.push(car);
+    state.sportsCarId = car.id;
   }
-  if (!step.target) return null;
-  return { x: step.target.x, y: step.target.y, radius: step.radius };
+  if (index === 2) {
+    mission.timer = MISSIONS.packageTime;
+    state.wanted = Math.max(state.wanted, 2);
+  }
+  if (index === 3) {
+    mission.stage = 'grab';
+  }
 }
 
-export function missionObjectiveText(missions) {
-  const mission = currentMission(missions);
-  const step = currentStep(missions);
-  if (!mission || !step) return 'Free roam — Sunbay is yours.';
-  return `${mission.name}: ${step.text}`;
-}
-
-/** Advance the mission state one fixed step. Returns 'done' when a mission completes. */
-export function stepMissions(dt, missions, state, onEvent) {
-  if (!missions.active || missions.completed) return null;
-  const mission = currentMission(missions);
-  const step = currentStep(missions);
-  if (!mission || !step) return null;
-  if (step.timer && missions.timer > 0) {
-    missions.timer -= dt;
-    if (missions.timer <= 0) {
-      missions.timer = 0;
-      onEvent('fail', 'Too slow — the buyer walked. Talk to Marta to try again.');
-      resetMission(missions, state);
-      return 'fail';
+export function currentObjective(state) {
+  const mission = state.mission;
+  const player = state.player;
+  if (mission.index >= 4) {
+    return { title: 'Sunbay City', text: 'Free roam — the city is yours', target: null, timer: 0 };
+  }
+  if (mission.index === 0) {
+    return { title: 'Welcome to Sunbay', text: "Go to Marta's Cafe", target: LANDMARKS.cafe, timer: 0 };
+  }
+  if (mission.index === 1) {
+    const car = carById(state, state.sportsCarId);
+    if (mission.stage === 'go' && car) {
+      return { title: 'Hot Wheels', text: 'Steal the orange sports car', target: { x: car.x, y: car.y }, timer: 0 };
     }
+    return { title: 'Hot Wheels', text: 'Take the sports car to Sunbay Garage', target: LANDMARKS.garage, timer: 0 };
   }
-  const target = missionTarget(missions, state);
-  if (!target) return null;
-  const player = state.player;
-  const d = Math.hypot(player.x - target.x, player.y - target.y);
-  if (step.action === 'deliver' && d < target.radius) {
-    if (step.action === 'deliver' && missions.step > 0 && mission.id === 2 && player.inCar !== missions.stealCar) return null;
-    return completeStep(missions, state, onEvent);
+  if (mission.index === 2) {
+    return { title: 'Package Run', text: 'Deliver the package to Palma Beach Bar', target: LANDMARKS.bar, timer: mission.timer };
   }
-  return null;
+  if (mission.stage === 'grab') {
+    return { title: 'The Marina Job', text: 'Grab the cash at the Marina Office', target: LANDMARKS.marina, timer: 0 };
+  }
+  return { title: 'The Marina Job', text: 'Escape to Sunbay Garage', target: LANDMARKS.garage, timer: 0 };
 }
 
-/** The player pressed E near the objective (or in the target car): try to finish this step. */
-export function interactMission(missions, state, onEvent) {
-  if (!missions.active || missions.completed) return false;
-  const mission = currentMission(missions);
-  const step = currentStep(missions);
-  if (!mission || !step) return false;
-  const target = missionTarget(missions, state);
-  if (!target) return false;
+/** Distance in metres from the player to the current objective (10 px to a metre). */
+export function objectiveDistance(state) {
+  const objective = currentObjective(state);
+  if (!objective.target) return 0;
+  return Math.round(distance(state.player, objective.target) / 10);
+}
+
+function completeMission(state) {
+  const mission = state.mission;
+  const reward = MISSIONS.reward[mission.index];
+  state.player.money += reward;
+  toast(state, `Mission complete — +$${reward}`);
+  mission.index += 1;
+  writeSave(state);
+  if (mission.index < 4) setupMission(state, mission.index);
+  else toast(state, 'Story complete — Sunbay City is yours');
+}
+
+/** True when the player stands at a mission talk/grab point: E belongs to the mission there,
+ * never to a passing car. */
+export function nearMissionInteract(state) {
   const player = state.player;
-  const d = Math.hypot(player.x - target.x, player.y - target.y);
-  if (step.action === 'talk' && d < target.radius + 30) {
-    return completeStep(missions, state, onEvent) === 'done';
-  }
-  if (step.action === 'steal' && player.inCar === missions.stealCar) {
-    return completeStep(missions, state, onEvent) === 'done';
-  }
+  const mission = state.mission;
+  if (mission.index === 0) return distance(player, LANDMARKS.cafe) < 64;
+  if (mission.index === 3 && mission.stage === 'grab') return distance(player, LANDMARKS.marina) < 64;
   return false;
 }
 
-/** Complete the current step from outside the mission module (e.g. stealing the target car). */
-export function forceCompleteStep(missions, state, onEvent) {
-  return completeStep(missions, state, onEvent);
-}
+/** Advance the story one step. `interact` is true on the frame the player pressed E. */
+export function updateMissions(state, dt, interact) {
+  const mission = state.mission;
+  const player = state.player;
+  if (mission.toastTime > 0) mission.toastTime -= dt;
+  if (mission.index >= 4 || player.dead) return;
 
-function completeStep(missions, state, onEvent) {
-  const mission = currentMission(missions);
-  const step = currentStep(missions);
-  missions.step += 1;
-  if (mission.id === 1 && missions.step === 1) {
-    state.player.hasPistol = true;
-  }
-  if (mission.id === 3 && missions.step === 1) {
-    missions.hasPackage = true;
-    missions.timer = 90;
-    addWanted(state, 2);
-    onEvent('info', 'Package in hand. Two stars — the cops heard about the run.');
-  }
-  if (mission.id === 4 && missions.step === 1) {
-    state.player.money += 1200;
-    addWanted(state, 3);
-    onEvent('info', 'Cash grabbed: +$1,200. Three stars — run for the safehouse!');
-  }
-  if (missions.step >= mission.steps.length) {
-    state.player.money += mission.reward;
-    missions.index += 1;
-    missions.step = 0;
-    missions.timer = 0;
-    missions.hasPackage = false;
-    const finishedAll = missions.index >= MISSIONS.length;
-    if (finishedAll) {
-      missions.completed = true;
-      missions.active = false;
+  if (mission.index === 0) {
+    if (interact && distance(player, LANDMARKS.cafe) < 64) {
+      player.pistol = true;
+      toast(state, "Marta: take this. You're going to need it.");
+      completeMission(state);
     }
-    // The progress is updated before the event fires: the event saves the game, and the
-    // save must hold the new mission, not the one just finished.
-    onEvent('done', `${mission.done} (+$${mission.reward})`);
-    if (finishedAll) {
-      onEvent('complete', 'Story complete — Sunbay City is yours. Free roam!');
+    return;
+  }
+  if (mission.index === 1) {
+    if (mission.stage === 'go' && player.inCar === state.sportsCarId) mission.stage = 'drive';
+    if (mission.stage === 'drive' && player.inCar === state.sportsCarId && distance(player, LANDMARKS.garage) < 95) {
+      completeMission(state);
     }
-    return 'done';
+    return;
   }
-  const next = currentStep(missions);
-  if (next) onEvent('info', next.text);
-  return 'step';
-}
-
-export function resetMission(missions, state) {
-  missions.step = 0;
-  missions.timer = 0;
-  missions.hasPackage = false;
-  if (state.wanted > 0) {
-    state.wanted = 0;
-    state.cleanTimer = 0;
-    state.police.clear();
+  if (mission.index === 2) {
+    mission.timer -= dt;
+    if (mission.timer <= 0) {
+      mission.timer = MISSIONS.packageTime;
+      toast(state, 'Too slow — the package run restarts');
+      return;
+    }
+    if (distance(player, LANDMARKS.bar) < 70) completeMission(state);
+    return;
   }
-}
-
-/** Place the mission-2 target car: the orange sports car by the marina road. */
-export function setupStealCar(missions, traffic, rand) {
-  if (missions.index !== 1 || missions.stealCar) return;
-  const car = traffic.spawnParkedCar();
-  car.color = '#ff8a3d';
-  car.x = 2700;
-  car.y = 2130;
-  car.angle = 0;
-  car.kind = 'parked';
-  traffic.cars.push(car);
-  missions.stealCar = car;
+  if (mission.index === 3) {
+    if (mission.stage === 'grab') {
+      if (interact && distance(player, LANDMARKS.marina) < 64) {
+        mission.stage = 'escape';
+        state.wanted = Math.max(state.wanted, 3);
+        toast(state, 'Cash grabbed — lose the cops!');
+      }
+      return;
+    }
+    if (distance(player, LANDMARKS.garage) < 95) completeMission(state);
+  }
 }

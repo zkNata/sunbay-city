@@ -1,100 +1,79 @@
-// The minimap: a small live map of Sunbay City in the bottom-left corner — roads, the sea,
-// the player (white arrow), police (blue/red), traffic (grey dots), pedestrians (faint dots),
-// the mission target (pulsing yellow) and the story places (letters).
-import { PALETTE, VIEW, WORLD } from './config.js';
-import { ROAD_LINES, PLACES } from './world.js';
-import { missionTarget } from './missions.js';
+// The minimap: the whole city shrunk into a corner, with blips for the player (white arrow),
+// the objective (yellow), cop cars (blue), traffic (grey dots) and foot cops (red dots).
+import { BEACH_Y, SEA_Y, WORLD } from './config.js';
+import { currentObjective } from './missions.js';
 
-const MAP = { x: 16, y: VIEW.height - 176, w: 220, h: 160 };
+export function drawMinimap(ctx, state, x, y, w, h) {
+  const sx = w / WORLD.width;
+  const sy = h / WORLD.height;
+  ctx.save();
+  ctx.fillStyle = 'rgba(20, 24, 32, 0.85)';
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeStyle = 'rgba(244, 241, 232, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
 
-export function drawMinimap(context, state) {
-  const scaleX = MAP.w / WORLD.width;
-  const scaleY = MAP.h / WORLD.height;
-  const toMapX = (x) => MAP.x + x * scaleX;
-  const toMapY = (y) => MAP.y + y * scaleY;
-  context.fillStyle = 'rgba(12, 10, 24, 0.78)';
-  context.beginPath();
-  context.roundRect(MAP.x - 6, MAP.y - 6, MAP.w + 12, MAP.h + 12, 10);
-  context.fill();
-  // Land, beach and sea.
-  context.fillStyle = '#8a7a52';
-  context.fillRect(MAP.x, MAP.y, MAP.w, MAP.h);
-  context.fillStyle = '#ecd9a0';
-  context.fillRect(MAP.x, toMapY(2240), MAP.w, MAP.h - (toMapY(2240) - MAP.y));
-  context.fillStyle = '#1d6f8e';
-  context.fillRect(MAP.x, toMapY(2320), MAP.w, MAP.h - (toMapY(2320) - MAP.y));
-  // Roads.
-  context.strokeStyle = '#3b3b44';
-  context.lineWidth = 3;
-  for (const line of ROAD_LINES) {
-    context.beginPath();
-    context.moveTo(toMapX(line), MAP.y);
-    context.lineTo(toMapX(line), MAP.y + MAP.h);
-    context.stroke();
-    context.beginPath();
-    context.moveTo(MAP.x, toMapY(line));
-    context.lineTo(MAP.x + MAP.w, toMapY(line));
-    context.stroke();
+  // Sea and beach along the south edge.
+  ctx.fillStyle = '#2f8fb5';
+  ctx.fillRect(x, y + SEA_Y * sy, w, h - SEA_Y * sy);
+  ctx.fillStyle = '#c9a86a';
+  ctx.fillRect(x, y + BEACH_Y * sy, w, (SEA_Y - BEACH_Y) * sy);
+
+  // Roads as pale lines.
+  ctx.strokeStyle = 'rgba(232, 200, 90, 0.55)';
+  ctx.lineWidth = 1;
+  for (const roadX of [240, 540, 840, 1140, 1440, 1740, 2040]) {
+    ctx.beginPath();
+    ctx.moveTo(x + roadX * sx, y);
+    ctx.lineTo(x + roadX * sx, y + h);
+    ctx.stroke();
   }
-  // Story places.
-  context.font = 'bold 10px sans-serif';
-  context.textAlign = 'center';
-  for (const key of Object.keys(PLACES)) {
-    const place = PLACES[key];
-    context.fillStyle = '#ffd34d';
-    context.fillText(key[0].toUpperCase(), toMapX(place.x), toMapY(place.y) + 3);
+  for (const roadY of [240, 540, 840, 1140]) {
+    ctx.beginPath();
+    ctx.moveTo(x, y + roadY * sy);
+    ctx.lineTo(x + w, y + roadY * sy);
+    ctx.stroke();
   }
-  // Mission target: a pulsing yellow blip.
-  const target = missionTarget(state.missions, state);
-  if (target) {
-    const pulse = 4 + 2 * Math.sin(performance.now() / 220);
-    context.fillStyle = '#ffcf3d';
-    context.beginPath();
-    context.arc(toMapX(target.x), toMapY(target.y), pulse, 0, Math.PI * 2);
-    context.fill();
-    context.strokeStyle = '#fff';
-    context.lineWidth = 1;
-    context.stroke();
+
+  // Buildings as small blocks.
+  ctx.fillStyle = 'rgba(244, 241, 232, 0.35)';
+  for (const b of state.city.buildings) {
+    ctx.fillRect(x + b.x * sx, y + b.y * sy, Math.max(1.5, b.w * sx), Math.max(1.5, b.h * sy));
   }
-  // Traffic and pedestrians, faint.
-  context.fillStyle = 'rgba(220,220,220,0.7)';
-  for (const car of state.traffic.cars) {
-    if (car.dead || car.isPlayerCar) continue;
-    context.fillRect(toMapX(car.x) - 1, toMapY(car.y) - 1, 2, 2);
+
+  const dot = (px, py, color, radius) => {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x + px * sx, y + py * sy, radius, 0, Math.PI * 2);
+    ctx.fill();
+  };
+  for (const car of state.cars) {
+    if (car.exploded) continue;
+    dot(car.x, car.y, car.driver === 'police' ? '#5b8cff' : 'rgba(200, 200, 200, 0.8)', car.driver === 'police' ? 2.5 : 1.6);
   }
-  context.fillStyle = 'rgba(255,255,255,0.45)';
-  for (const ped of state.peds.peds) {
-    if (ped.down) continue;
-    context.fillRect(toMapX(ped.x) - 1, toMapY(ped.y) - 1, 2, 2);
+  for (const cop of state.footCops) dot(cop.x, cop.y, '#ff5a4d', 2);
+  const objective = currentObjective(state);
+  if (objective.target) {
+    ctx.fillStyle = '#f2c94c';
+    ctx.beginPath();
+    ctx.arc(x + objective.target.x * sx, y + objective.target.y * sy, 3, 0, Math.PI * 2);
+    ctx.fill();
   }
-  // Police, flashing blue.
-  const blink = Math.floor(performance.now() / 300) % 2 === 0;
-  context.fillStyle = blink ? '#3b82ff' : '#ff3b30';
-  for (const unit of state.police.units) {
-    const x = unit.kind === 'car' ? unit.car.x : unit.x;
-    const y = unit.kind === 'car' ? unit.car.y : unit.y;
-    context.beginPath();
-    context.arc(toMapX(x), toMapY(y), 3.5, 0, Math.PI * 2);
-    context.fill();
-  }
+
   // The player: a white arrow pointing where they face.
   const player = state.player;
-  context.save();
-  context.translate(toMapX(player.x), toMapY(player.y));
-  context.rotate(player.angle);
-  context.fillStyle = '#ffffff';
-  context.beginPath();
-  context.moveTo(7, 0);
-  context.lineTo(-5, -5);
-  context.lineTo(-5, 5);
-  context.closePath();
-  context.fill();
-  context.restore();
-  context.strokeStyle = 'rgba(255,255,255,0.5)';
-  context.lineWidth = 1;
-  context.strokeRect(MAP.x - 6, MAP.y - 6, MAP.w + 12, MAP.h + 12);
-  context.fillStyle = 'rgba(245,239,224,0.85)';
-  context.font = '11px sans-serif';
-  context.textAlign = 'left';
-  context.fillText('SUNBAY CITY', MAP.x, MAP.y - 10);
+  const px = x + player.x * sx;
+  const py = y + player.y * sy;
+  ctx.save();
+  ctx.translate(px, py);
+  ctx.rotate(player.angle);
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(6, 0);
+  ctx.lineTo(-4, -4);
+  ctx.lineTo(-4, 4);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+  ctx.restore();
 }

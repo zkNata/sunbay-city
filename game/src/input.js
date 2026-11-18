@@ -1,101 +1,85 @@
-// Keyboard and pointer input. Held keys steer or walk; one-shot presses (confirm, interact,
-// pause, punch, mute) are queued as bit flags and taken once by the loop, so a press between
-// two frames is never lost and never counted twice.
+// Keyboard and mouse. takeActions() is called exactly once per frame by the loop and returns
+// the action bits pressed since the last call; reading it twice would swallow presses.
+import { VIEW } from './config.js';
 
 export const ACTION_CONFIRM = 1;
 export const ACTION_PAUSE = 2;
 export const ACTION_INTERACT = 4;
 export const ACTION_PUNCH = 8;
-export const ACTION_MUTE = 16;
-
-const UP = new Set(['ArrowUp', 'KeyW']);
-const DOWN = new Set(['ArrowDown', 'KeyS']);
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Enter']);
-const INTERACT = new Set(['KeyE']);
-const PUNCH = new Set(['KeyF']);
-const PAUSE = new Set(['KeyP', 'Escape']);
-const MUTE = new Set(['KeyM']);
-const RUN = new Set(['ShiftLeft', 'ShiftRight']);
+export const ACTION_SHOOT = 16;
+export const ACTION_MUTE = 32;
 
 export function createInput(canvas) {
-  const held = new Set();
-  let actions = 0;
-  let mouseX = 0;
-  let mouseY = 0;
-  let mouseDown = false;
-  let mouseClicked = false;
+  const keys = new Set();
+  let pending = 0;
+  const mouse = { x: VIEW.width / 2, y: VIEW.height / 2, down: false };
 
-  window.addEventListener('keydown', (event) => {
-    if (UP.has(event.code) || DOWN.has(event.code) || LEFT.has(event.code) || RIGHT.has(event.code) || RUN.has(event.code)) {
-      held.add(event.code);
-    } else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (INTERACT.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_INTERACT;
-    } else if (PUNCH.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PUNCH;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else if (MUTE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_MUTE;
-    } else {
-      return;
-    }
-    event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    held.delete(event.code);
-  });
-  window.addEventListener('blur', () => {
-    held.clear();
-    mouseDown = false;
-  });
-  canvas.addEventListener('pointermove', (event) => {
+  function keyDown(event) {
+    const key = event.key.toLowerCase();
+    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(key)) event.preventDefault();
+    if (event.repeat) return;
+    keys.add(key);
+    if (key === 'enter' || key === ' ') pending |= ACTION_CONFIRM;
+    if (key === 'p' || key === 'escape') pending |= ACTION_PAUSE;
+    if (key === 'e') pending |= ACTION_INTERACT;
+    if (key === 'f') pending |= ACTION_PUNCH;
+    if (key === 'm') pending |= ACTION_MUTE;
+  }
+
+  function keyUp(event) {
+    keys.delete(event.key.toLowerCase());
+  }
+
+  function mouseMove(event) {
     const rect = canvas.getBoundingClientRect();
-    mouseX = event.clientX - rect.left;
-    mouseY = event.clientY - rect.top;
-  });
-  canvas.addEventListener('pointerdown', (event) => {
-    const rect = canvas.getBoundingClientRect();
-    mouseX = event.clientX - rect.left;
-    mouseY = event.clientY - rect.top;
-    mouseDown = true;
-    mouseClicked = true;
-    actions |= ACTION_CONFIRM;
-  });
-  canvas.addEventListener('pointerup', () => {
-    mouseDown = false;
-  });
+    mouse.x = ((event.clientX - rect.left) / rect.width) * VIEW.width;
+    mouse.y = ((event.clientY - rect.top) / rect.height) * VIEW.height;
+  }
+
+  function mouseDown(event) {
+    mouseMove(event);
+    mouse.down = true;
+    if (event.button === 0) pending |= ACTION_SHOOT;
+  }
+
+  function mouseUp() {
+    mouse.down = false;
+  }
+
+  window.addEventListener('keydown', keyDown);
+  window.addEventListener('keyup', keyUp);
+  canvas.addEventListener('mousemove', mouseMove);
+  canvas.addEventListener('mousedown', mouseDown);
+  window.addEventListener('mouseup', mouseUp);
   canvas.addEventListener('contextmenu', (event) => event.preventDefault());
 
-  function hasAny(set) {
-    for (const code of set) if (held.has(code)) return true;
-    return false;
+  function held(...names) {
+    return names.some((name) => keys.has(name));
   }
 
   return {
-    /** -1/0/1 on each axis from the held movement keys. */
-    move() {
-      return {
-        x: (hasAny(RIGHT) ? 1 : 0) - (hasAny(LEFT) ? 1 : 0),
-        y: (hasAny(DOWN) ? 1 : 0) - (hasAny(UP) ? 1 : 0),
-        run: hasAny(RUN),
-      };
+    /** WASD/arrows as a unit vector; empty when no movement key is held. */
+    direction() {
+      const x = (held('d', 'arrowright') ? 1 : 0) - (held('a', 'arrowleft') ? 1 : 0);
+      const y = (held('s', 'arrowdown') ? 1 : 0) - (held('w', 'arrowup') ? 1 : 0);
+      if (x === 0 && y === 0) return { x: 0, y: 0 };
+      const length = Math.hypot(x, y);
+      return { x: x / length, y: y / length };
     },
-    mouse() {
-      return { x: mouseX, y: mouseY, down: mouseDown };
+    throttle() {
+      return (held('w', 'arrowup') ? 1 : 0) - (held('s', 'arrowdown') ? 1 : 0);
     },
-    takeClick() {
-      const clicked = mouseClicked;
-      mouseClicked = false;
-      return clicked;
+    steer() {
+      return (held('a', 'arrowleft') ? 1 : 0) - (held('d', 'arrowright') ? 1 : 0);
     },
+    run() {
+      return held('shift');
+    },
+    mouse: () => mouse,
     takeActions() {
-      const taken = actions;
-      actions = 0;
-      return taken;
+      const actions = pending;
+      pending = 0;
+      return actions;
     },
   };
 }

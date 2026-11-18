@@ -1,37 +1,33 @@
-// Saving: the player's cash, health, mission progress, position and clock, kept in this
-// browser's localStorage. Nothing leaves the machine; a failed write just means this visit
-// only (private windows can refuse storage).
+// Saving: the mission index, cash, health and position, in this browser's local storage.
+// The save is written AFTER the mission index moves (completeMission), never before it.
 import { SAVE_KEY } from './config.js';
+
+export function writeSave(state) {
+  try {
+    const player = state.player;
+    window.localStorage.setItem(SAVE_KEY, JSON.stringify({
+      missionIndex: state.mission.index,
+      money: player.money,
+      health: player.health,
+      x: player.x,
+      y: player.y,
+      pistol: player.pistol,
+      clockMinutes: state.clockMinutes,
+    }));
+  } catch {
+    // Storage can be off (private windows): the run then lasts this visit only.
+  }
+}
 
 export function readSave() {
   try {
     const raw = window.localStorage.getItem(SAVE_KEY);
     if (!raw) return null;
     const data = JSON.parse(raw);
-    if (typeof data.money !== 'number' || typeof data.missionIndex !== 'number') return null;
+    if (!data || typeof data.missionIndex !== 'number') return null;
     return data;
   } catch {
     return null;
-  }
-}
-
-export function writeSave(state) {
-  try {
-    const data = {
-      money: state.player.money,
-      health: state.player.health,
-      missionIndex: state.missions.index,
-      missionStep: state.missions.step,
-      hasPistol: state.player.hasPistol,
-      x: state.player.x,
-      y: state.player.y,
-      clockMinutes: state.clockMinutes,
-      savedAt: Date.now(),
-    };
-    window.localStorage.setItem(SAVE_KEY, JSON.stringify(data));
-    return true;
-  } catch {
-    return false;
   }
 }
 
